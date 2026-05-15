@@ -15,8 +15,9 @@ import {
   LogOut,
   MessageSquare,
   Puzzle,
+  Share2,
+  Shield,
   SlidersHorizontal,
-  Sparkles,
   Store,
   Users,
 } from "lucide-react";
@@ -29,18 +30,18 @@ import {
   getCustomLlmProvidersRoute,
   getOrgAccessFlags,
   getIntegrationsRoute,
-  getInferenceRoute,
   getMembersRoute,
   getOrgDashboardRoute,
   getOrgSettingsRoute,
   getMarketplacesRoute,
   getPluginsRoute,
+  getSsoRoute,
+  getScimRoute,
+  getSharedSetupsRoute,
   getSkillHubsRoute,
 } from "../../../../_lib/den-org";
 import { useOrgDashboard } from "../_providers/org-dashboard-provider";
-import { buildDenFeedbackUrl } from "../../../../_lib/feedback";
-
-const OPENWORK_DOCS_URL = "https://openworklabs.com/docs";
+import { OPENWORK_DOCS_URL, buildDenFeedbackUrl } from "./shared-setup-data";
 
 function OrgMark({ name }: { name: string }) {
   const initials = useMemo(() => {
@@ -102,20 +103,26 @@ function getDashboardPageTitle(pathname: string, orgSlug: string | null) {
   if (pathname === dashboardRoot) {
     return "Home";
   }
+  if (pathname.startsWith(getSharedSetupsRoute(orgSlug))) {
+    return "Team Templates";
+  }
   if (pathname.startsWith(getMembersRoute(orgSlug))) {
     return "Members";
   }
   if (pathname.startsWith(getApiKeysRoute(orgSlug))) {
     return "API Keys";
   }
+  if (pathname.startsWith(getScimRoute(orgSlug))) {
+    return "SCIM";
+  }
+  if (pathname.startsWith(getSsoRoute(orgSlug))) {
+    return "SSO";
+  }
   if (pathname.startsWith(getBackgroundAgentsRoute(orgSlug))) {
-    return "Background Tasks";
+    return "Shared Workspaces";
   }
   if (pathname.startsWith(getCustomLlmProvidersRoute(orgSlug))) {
     return "LLM Providers";
-  }
-  if (pathname.startsWith(getInferenceRoute(orgSlug))) {
-    return "OpenWork Models";
   }
   if (pathname.startsWith(getSkillHubsRoute(orgSlug))) {
     return "Skill Hubs";
@@ -169,30 +176,27 @@ export function OrgDashboardShell({ children }: { children: React.ReactNode }) {
       label: "Dashboard",
       icon: Home,
     },
-    // NOTE: Shared Workspace soft-disabled — uncomment to re-enable
-    // {
-    //   href: activeOrg ? getBackgroundAgentsRoute(activeOrg.slug) : "#",
-    //   label: "Shared Workspace",
-    //   icon: Bot,
-    //   badge: "Alpha",
-    // },
     {
-      href: activeOrg ? getInferenceRoute(activeOrg.slug) : "#",
-      label: "OpenWork Models",
-      icon: Sparkles,
-      badge: "Beta",
+      href: activeOrg ? getSharedSetupsRoute(activeOrg.slug) : "#",
+      label: "Team Templates",
+      icon: Share2,
+    },
+    {
+      href: activeOrg ? getBackgroundAgentsRoute(activeOrg.slug) : "#",
+      label: "Shared Workspace",
+      icon: Bot,
+      badge: "Alpha",
     },
     {
       href: activeOrg ? getCustomLlmProvidersRoute(activeOrg.slug) : "#",
       label: "LLM Providers",
       icon: Cpu,
     },
-    // NOTE: Skill Hubs soft-disabled — uncomment to re-enable
-    // {
-    //   href: activeOrg ? getSkillHubsRoute(activeOrg.slug) : "#",
-    //   label: "Skill Hubs",
-    //   icon: BookOpen,
-    // },
+    {
+      href: activeOrg ? getSkillHubsRoute(activeOrg.slug) : "#",
+      label: "Skill Hubs",
+      icon: BookOpen,
+    },
     {
       href: activeOrg ? getIntegrationsRoute(activeOrg.slug) : "#",
       label: "Integrations",
@@ -221,6 +225,20 @@ export function OrgDashboardShell({ children }: { children: React.ReactNode }) {
           href: activeOrg ? getApiKeysRoute(activeOrg.slug) : "#",
           label: "API Keys",
           icon: KeyRound,
+        }]
+      : []),
+    ...(access.canManageScim
+      ? [{
+          href: activeOrg ? getScimRoute(activeOrg.slug) : "#",
+          label: "SCIM",
+          icon: Shield,
+        }]
+      : []),
+    ...(access.canManageSso
+      ? [{
+          href: activeOrg ? getSsoRoute(activeOrg.slug) : "#",
+          label: "SSO",
+          icon: Shield,
         }]
       : []),
     {

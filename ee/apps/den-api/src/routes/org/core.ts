@@ -1,12 +1,14 @@
 import { eq } from "@openwork-ee/den-db/drizzle"
-import { OrganizationTable } from "@openwork-ee/den-db/schema"
+import { OrganizationTable, SsoConnectionTable } from "@openwork-ee/den-db/schema"
 import { desktopAppRestrictionsSchema } from "@openwork/types/den/desktop-app-restrictions"
 import { normalizeDenTypeId, type DenTypeId } from "@openwork-ee/utils/typeid"
 import type { Hono } from "hono"
 import { describeRoute } from "hono-openapi"
 import { z } from "zod"
 import { auth } from "../../auth.js"
+import { requireCloudWorkerAccess } from "../../billing/polar.js"
 import { db } from "../../db.js"
+import { env } from "../../env.js"
 import { jsonValidator, queryValidator, requireUserMiddleware, resolveMemberTeamsMiddleware, resolveOrganizationContextMiddleware } from "../../middleware/index.js"
 import { denTypeIdSchema, forbiddenSchema, invalidRequestSchema, jsonResponse, notFoundSchema, unauthorizedSchema } from "../../openapi.js"
 import {
@@ -31,9 +33,21 @@ const updateOrganizationSchema = z.object({
   allowedEmailDomains: z.array(z.string().trim().min(1).max(255)).max(100).nullable().optional(),
   desktopAppRestrictions: desktopAppRestrictionsSchema.optional(),
   allowedDesktopVersions: z.array(z.string().trim().min(1).max(32)).max(200).nullable().optional(),
-}).refine((value) => value.name !== undefined || value.allowedEmailDomains !== undefined || value.desktopAppRestrictions !== undefined || value.allowedDesktopVersions !== undefined, {
+  requireSso: z.boolean().optional(),
+}).refine((value) => value.name !== undefined || value.allowedEmailDomains !== undefined || value.desktopAppRestrictions !== undefined || value.allowedDesktopVersions !== undefined || value.requireSso !== undefined, {
   message: "Provide at least one organization field to update.",
 })
+
+const resolveSsoByEmailQuerySchema = z.object({
+  email: z.string().trim().email(),
+})
+
+const resolveSsoByEmailResponseSchema = z.object({
+  requireSso: z.boolean(),
+  organizationSlug: z.string(),
+  signInPath: z.string(),
+  signInUrl: z.string().url(),
+}).meta({ ref: "ResolveOrganizationSsoByEmailResponse" })
 
 const invitationPreviewQuerySchema = z.object({
   id: denTypeIdSchema("invitation"),
@@ -54,6 +68,16 @@ const organizationOwnerSchema = z.object({
   email: z.string().email().nullable(),
   image: z.string().nullable().optional(),
 }).meta({ ref: "OrganizationOwner" })
+
+const paymentRequiredSchema = z.object({
+  error: z.literal("payment_required"),
+  message: z.string(),
+  polar: z.object({
+    checkoutUrl: z.string().nullable(),
+    productId: z.string().nullable().optional(),
+    benefitId: z.string().nullable().optional(),
+  }).passthrough(),
+}).meta({ ref: "PaymentRequiredError" })
 
 const invitationPreviewResponseSchema = z.object({}).passthrough().meta({ ref: "InvitationPreviewResponse" })
 
@@ -129,11 +153,12 @@ export function registerOrgCoreRoutes<T extends { Variables: OrgRouteVariables }
       tags: ["Organizations"],
       hide: true,
       summary: "Create organization",
-      description: "Creates a new organization for the signed-in user. Billing is enforced only when launching shared cloud workspaces.",
+      description: "Creates a new organization for the signed-in user after verifying that their account can provision OpenWork Cloud workspaces.",
       responses: {
         201: jsonResponse("Organization created successfully.", organizationResponseSchema),
         400: jsonResponse("The organization creation request body was invalid.", invalidRequestSchema),
         401: jsonResponse("The caller must be signed in to create an organization.", unauthorizedSchema),
+        402: jsonResponse("The caller needs an active cloud plan before creating an organization.", paymentRequiredSchema),
         403: jsonResponse("API keys cannot create organizations.", forbiddenSchema),
       },
     }),
@@ -149,6 +174,29 @@ export function registerOrgCoreRoutes<T extends { Variables: OrgRouteVariables }
 
     const user = c.get("user")
     const input = c.req.valid("json")
+    const email = getRequiredUserEmail(user)
+
+    if (!email) {
+      return c.json({ error: "user_email_required" }, 400)
+    }
+
+    const access = await requireCloudWorkerAccess({
+      userId: normalizeDenTypeId("user", user.id),
+      email,
+      name: user.name ?? user.email ?? "OpenWork User",
+    })
+
+    if (!access.allowed) {
+      return c.json({
+        error: "payment_required",
+        message: "Creating a workspace requires an active OpenWork Cloud plan.",
+        polar: {
+          checkoutUrl: access.checkoutUrl,
+          productId: env.polar.productId,
+          benefitId: env.polar.benefitId,
+        },
+      }, 402)
+    }
 
     const organizationId = await createOrganizationForUser({
       userId: normalizeDenTypeId("user", user.id),
@@ -309,6 +357,7 @@ export function registerOrgCoreRoutes<T extends { Variables: OrgRouteVariables }
         allowedEmailDomains: normalizedDomains.domains,
         desktopAppRestrictions: input.desktopAppRestrictions,
         allowedDesktopVersions: input.allowedDesktopVersions,
+        requireSso: input.requireSso,
       })
 
       if (!updated) {
@@ -316,6 +365,51 @@ export function registerOrgCoreRoutes<T extends { Variables: OrgRouteVariables }
       }
 
       return c.json({ organization: updated })
+    },
+  )
+
+  app.get(
+    "/v1/orgs/sso/resolve",
+    describeRoute({
+      tags: ["Organizations"],
+      hide: true,
+      summary: "Resolve organization SSO by email",
+      description: "Returns the org SSO entry URL for an email address when the matching organization requires SSO.",
+      responses: {
+        200: jsonResponse("Organization SSO resolution returned successfully.", resolveSsoByEmailResponseSchema),
+        204: { description: "No enforced organization SSO route matched this email." },
+        400: jsonResponse("The SSO resolution query parameters were invalid.", invalidRequestSchema),
+      },
+    }),
+    queryValidator(resolveSsoByEmailQuerySchema),
+    async (c) => {
+      const query = c.req.valid("query")
+      const domain = query.email.slice(query.email.lastIndexOf("@") + 1).toLowerCase()
+      const matches = await db
+        .select({
+          slug: OrganizationTable.slug,
+          metadata: OrganizationTable.metadata,
+          signInPath: SsoConnectionTable.signInPath,
+          domain: SsoConnectionTable.domain,
+        })
+        .from(OrganizationTable)
+        .innerJoin(SsoConnectionTable, eq(OrganizationTable.id, SsoConnectionTable.organizationId))
+
+      const match = matches.find((row) => {
+        const metadata = row.metadata && typeof row.metadata === "object" ? row.metadata as Record<string, unknown> : {}
+        return metadata.requireSso === true && row.domain.toLowerCase() === domain
+      })
+
+      if (!match) {
+        return c.body(null, 204)
+      }
+
+      return c.json({
+        requireSso: true,
+        organizationSlug: match.slug,
+        signInPath: match.signInPath,
+        signInUrl: new URL(match.signInPath, env.betterAuthTrustedOrigins[0] ?? env.betterAuthUrl).toString(),
+      })
     },
   )
 
