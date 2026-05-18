@@ -1,24 +1,49 @@
 import { create } from "zustand";
+import * as z from "zod";
+
+import { clamp } from "@/lib/utils";
 
 export const PERSISTED_UI_STATE_KEY = "openwork:ui-state:v1";
 const SIDEBAR_COOKIE_NAME = "sidebar_state";
+const LEGACY_WORKSPACE_LEFT_SIDEBAR_WIDTH_KEY = "openwork.workspace-shell.left-width.v1";
+const LEGACY_WORKSPACE_RIGHT_SIDEBAR_EXPANDED_KEY = "openwork.workspace-shell.right-expanded.v3";
+const LEGACY_WORKSPACE_RIGHT_SIDEBAR_WIDTH_KEY = "openwork.workspace-shell.right-width.v1";
+
+export const DEFAULT_WORKSPACE_LEFT_SIDEBAR_WIDTH = 260;
+export const MIN_WORKSPACE_LEFT_SIDEBAR_WIDTH = 220;
+export const MAX_WORKSPACE_LEFT_SIDEBAR_WIDTH = 420;
+export const DEFAULT_WORKSPACE_RIGHT_SIDEBAR_COLLAPSED_WIDTH = 72;
+export const DEFAULT_WORKSPACE_RIGHT_SIDEBAR_EXPANDED_WIDTH = 520;
+export const MIN_WORKSPACE_RIGHT_SIDEBAR_WIDTH = 320;
+export const MAX_WORKSPACE_RIGHT_SIDEBAR_WIDTH = 960;
 
 export type PersistedUiState = {
   sidebarOpen: boolean;
   browserPanelOpen?: boolean;
   applicationMenuVisible?: boolean;
+  workspaceLeftSidebarWidth?: number;
+  workspaceRightSidebarExpanded?: boolean;
+  workspaceRightSidebarExpandedWidth?: number;
 };
 
 export type UiState = {
   sidebarOpen: boolean;
   browserPanelOpen: boolean;
   applicationMenuVisible: boolean;
+  workspaceLeftSidebarWidth: number;
+  workspaceLeftSidebarResizing: boolean;
+  workspaceRightSidebarExpanded: boolean;
+  workspaceRightSidebarExpandedWidth: number;
 };
 
 const initialState: UiState = {
   sidebarOpen: true,
   browserPanelOpen: false,
   applicationMenuVisible: false,
+  workspaceLeftSidebarWidth: DEFAULT_WORKSPACE_LEFT_SIDEBAR_WIDTH,
+  workspaceLeftSidebarResizing: false,
+  workspaceRightSidebarExpanded: false,
+  workspaceRightSidebarExpandedWidth: DEFAULT_WORKSPACE_RIGHT_SIDEBAR_EXPANDED_WIDTH,
 };
 
 function readSidebarCookieOpen(): boolean | null {
@@ -38,6 +63,38 @@ function readSidebarCookieOpen(): boolean | null {
   return cookie.slice(prefix.length) === "true";
 }
 
+function readLegacyNumber(raw: string | null, min: number, max: number) {  
+  const parsed = z.coerce.number().transform((value) => clamp(value, min, max)).safeParse(raw);
+
+  return parsed.success ? parsed.data : null;
+}
+
+function readLegacyWorkspaceShellState() {
+  if (globalThis.window === undefined) {
+    return {};
+  }
+
+  const rightSidebarExpanded = window.localStorage.getItem(LEGACY_WORKSPACE_RIGHT_SIDEBAR_EXPANDED_KEY);
+  const leftSidebarWidth = window.localStorage.getItem(LEGACY_WORKSPACE_LEFT_SIDEBAR_WIDTH_KEY);
+  const rightSidebarWidth = window.localStorage.getItem(LEGACY_WORKSPACE_RIGHT_SIDEBAR_WIDTH_KEY);
+
+  return {
+    workspaceLeftSidebarWidth:
+      readLegacyNumber(
+        leftSidebarWidth,
+        MIN_WORKSPACE_LEFT_SIDEBAR_WIDTH,
+        MAX_WORKSPACE_LEFT_SIDEBAR_WIDTH,
+      ) ?? undefined,
+    workspaceRightSidebarExpanded: rightSidebarExpanded == null ? undefined : rightSidebarExpanded === "1",
+    workspaceRightSidebarExpandedWidth:
+      readLegacyNumber(
+        rightSidebarWidth,
+        MIN_WORKSPACE_RIGHT_SIDEBAR_WIDTH,
+        MAX_WORKSPACE_RIGHT_SIDEBAR_WIDTH,
+      ) ?? undefined,
+  };
+}
+
 function readPersistedUiState(): UiState {
   if (globalThis.window === undefined) {
     return initialState;
@@ -45,26 +102,52 @@ function readPersistedUiState(): UiState {
 
   try {
     const raw = window.localStorage.getItem(PERSISTED_UI_STATE_KEY);
-    
+    const legacyWorkspaceShellState = readLegacyWorkspaceShellState();
+
     if (!raw) {
       const sidebarOpen = readSidebarCookieOpen();
+      const migratedState: UiState = {
+        ...initialState,
+        browserPanelOpen:
+          legacyWorkspaceShellState.workspaceRightSidebarExpanded ?? initialState.browserPanelOpen,
+        workspaceLeftSidebarWidth:
+          legacyWorkspaceShellState.workspaceLeftSidebarWidth ?? initialState.workspaceLeftSidebarWidth,
+        workspaceRightSidebarExpanded:
+          legacyWorkspaceShellState.workspaceRightSidebarExpanded ?? initialState.workspaceRightSidebarExpanded,
+        workspaceRightSidebarExpandedWidth:
+          legacyWorkspaceShellState.workspaceRightSidebarExpandedWidth ??
+          initialState.workspaceRightSidebarExpandedWidth,
+      };
 
       if (sidebarOpen === null) {
-        return initialState;
+        return migratedState;
       }
 
-      return { ...initialState, sidebarOpen };
+      return { ...migratedState, sidebarOpen };
     }
 
     const parsed: PersistedUiState = JSON.parse(raw);
-    const browserPanelOpen = parsed.browserPanelOpen ?? initialState.browserPanelOpen;
-    const applicationMenuVisible = parsed.applicationMenuVisible ?? initialState.applicationMenuVisible;
 
     return {
       ...initialState,
       sidebarOpen: parsed.sidebarOpen,
-      browserPanelOpen,
-      applicationMenuVisible,
+      browserPanelOpen:
+        parsed.browserPanelOpen ??
+        legacyWorkspaceShellState.workspaceRightSidebarExpanded ??
+        initialState.browserPanelOpen,
+      applicationMenuVisible: parsed.applicationMenuVisible ?? initialState.applicationMenuVisible,
+      workspaceLeftSidebarWidth:
+        parsed.workspaceLeftSidebarWidth ??
+        legacyWorkspaceShellState.workspaceLeftSidebarWidth ??
+        initialState.workspaceLeftSidebarWidth,
+      workspaceRightSidebarExpanded:
+        parsed.workspaceRightSidebarExpanded ??
+        legacyWorkspaceShellState.workspaceRightSidebarExpanded ??
+        initialState.workspaceRightSidebarExpanded,
+      workspaceRightSidebarExpandedWidth:
+        parsed.workspaceRightSidebarExpandedWidth ??
+        legacyWorkspaceShellState.workspaceRightSidebarExpandedWidth ??
+        initialState.workspaceRightSidebarExpandedWidth,
     };
   } catch {
     return initialState;
@@ -83,6 +166,9 @@ export function persistUiState(state: UiState): void {
         sidebarOpen: state.sidebarOpen,
         browserPanelOpen: state.browserPanelOpen,
         applicationMenuVisible: state.applicationMenuVisible,
+        workspaceLeftSidebarWidth: state.workspaceLeftSidebarWidth,
+        workspaceRightSidebarExpanded: state.workspaceRightSidebarExpanded,
+        workspaceRightSidebarExpandedWidth: state.workspaceRightSidebarExpandedWidth,
       } satisfies PersistedUiState),
     );
   } catch {
@@ -131,6 +217,58 @@ export function setApplicationMenuVisible(state: UiState, visible: boolean): UiS
   };
 }
 
+export function setWorkspaceLeftSidebarWidth(state: UiState, width: number): UiState {
+  const nextWidth = clamp(width, MIN_WORKSPACE_LEFT_SIDEBAR_WIDTH, MAX_WORKSPACE_LEFT_SIDEBAR_WIDTH);
+
+  if (state.workspaceLeftSidebarWidth === nextWidth) {
+    return state;
+  }
+
+  return {
+    ...state,
+    workspaceLeftSidebarWidth: nextWidth,
+  };
+}
+
+export function setWorkspaceLeftSidebarResizing(state: UiState, resizing: boolean): UiState {
+  if (state.workspaceLeftSidebarResizing === resizing) {
+    return state;
+  }
+
+  return {
+    ...state,
+    workspaceLeftSidebarResizing: resizing,
+  };
+}
+
+export function setWorkspaceRightSidebarExpanded(state: UiState, expanded: boolean): UiState {
+  if (state.workspaceRightSidebarExpanded === expanded) {
+    return state;
+  }
+
+  return {
+    ...state,
+    workspaceRightSidebarExpanded: expanded,
+  };
+}
+
+export function toggleWorkspaceRightSidebar(state: UiState): UiState {
+  return setWorkspaceRightSidebarExpanded(state, !state.workspaceRightSidebarExpanded);
+}
+
+export function setWorkspaceRightSidebarExpandedWidth(state: UiState, width: number): UiState {
+  const nextWidth = clamp(width, MIN_WORKSPACE_RIGHT_SIDEBAR_WIDTH, MAX_WORKSPACE_RIGHT_SIDEBAR_WIDTH);
+
+  if (state.workspaceRightSidebarExpandedWidth === nextWidth) {
+    return state;
+  }
+
+  return {
+    ...state,
+    workspaceRightSidebarExpandedWidth: nextWidth,
+  };
+}
+
 function syncApplicationMenuVisible(visible: boolean): void {
   void globalThis.window?.__OPENWORK_ELECTRON__?.invokeDesktop?.("__setApplicationMenuVisible", visible);
 }
@@ -142,6 +280,11 @@ type UiStateStore = UiState & {
   closeBrowserPanel: () => void;
   toggleBrowserPanel: () => void;
   setApplicationMenuVisible: (visible: boolean) => void;
+  setWorkspaceLeftSidebarWidth: (width: number) => void;
+  setWorkspaceLeftSidebarResizing: (resizing: boolean) => void;
+  setWorkspaceRightSidebarExpanded: (expanded: boolean) => void;
+  toggleWorkspaceRightSidebar: () => void;
+  setWorkspaceRightSidebarExpandedWidth: (width: number) => void;
 };
 
 export const useUiStateStore = create<UiStateStore>((set) => ({
@@ -155,8 +298,16 @@ export const useUiStateStore = create<UiStateStore>((set) => ({
     set((state) => setApplicationMenuVisible(state, visible));
     syncApplicationMenuVisible(visible);
   },
+  setWorkspaceLeftSidebarWidth: (width) => set((state) => setWorkspaceLeftSidebarWidth(state, width)),
+  setWorkspaceLeftSidebarResizing: (resizing) => set((state) => setWorkspaceLeftSidebarResizing(state, resizing)),
+  setWorkspaceRightSidebarExpanded: (expanded) => set((state) => setWorkspaceRightSidebarExpanded(state, expanded)),
+  toggleWorkspaceRightSidebar: () => set((state) => toggleWorkspaceRightSidebar(state)),
+  setWorkspaceRightSidebarExpandedWidth: (width) =>
+    set((state) => setWorkspaceRightSidebarExpandedWidth(state, width)),
 }));
 
-syncApplicationMenuVisible(useUiStateStore.getState().applicationMenuVisible);
+const currentUiState = useUiStateStore.getState();
 
+syncApplicationMenuVisible(currentUiState.applicationMenuVisible);
+persistUiState(currentUiState);
 useUiStateStore.subscribe((state) => persistUiState(state));

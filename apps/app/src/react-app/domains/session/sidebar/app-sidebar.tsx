@@ -1,5 +1,6 @@
 /** @jsxImportSource react */
 import * as React from "react";
+import type { CSSProperties } from "react";
 import {
   AlertCircle,
   ChevronRight,
@@ -44,6 +45,7 @@ import {
   SidebarMenuSubButton,
   SidebarMenuSubItem,
   SidebarRail,
+  SidebarProvider,
 } from "@/components/ui/sidebar";
 import {
   Collapsible,
@@ -65,6 +67,9 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { Button } from "@/components/ui/button";
 
+import { useShellConfig } from "../../../shell/shell-config";
+import { useLeftSidebarResize } from "../../../shell/workspace-shell-layout";
+import { useUiStateStore } from "../../../shell/ui-state-store";
 import { SidebarContext, useSidebarContext } from "./app-sidebar-provider";
 import type { SidebarContextValue } from "./app-sidebar-provider";
 import {
@@ -78,6 +83,36 @@ import {
 import type { SessionListItem, SessionTreeState } from "./utils";
 import { cn } from "@/lib/utils";
 import { WorkspaceIcon } from "../../../design-system/workspace-icon";
+
+export type AppSidebarProviderProps = {
+  children: React.ReactNode;
+};
+
+export function AppSidebarProvider({
+  children,
+}: AppSidebarProviderProps) {
+  const { config: shellConfig } = useShellConfig();
+  const sidebarOpen = useUiStateStore((state) => state.sidebarOpen);
+  const setSidebarOpen = useUiStateStore((state) => state.setSidebarOpen);
+  const leftSidebarResizing = useUiStateStore((state) => state.workspaceLeftSidebarResizing);
+  const leftSidebarWidth = useUiStateStore((state) => state.workspaceLeftSidebarWidth);
+
+  return (
+    <SidebarProvider
+      open={sidebarOpen}
+      onOpenChange={setSidebarOpen}
+      className={cn(
+        "relative min-h-0 flex-1 mac:bg-transparent",
+        leftSidebarResizing &&
+          "**:data-[slot=sidebar-container]:transition-none **:data-[slot=sidebar-gap]:transition-none",
+        !shellConfig.sidebar && "**:data-[slot=sidebar-container]:hidden **:data-[slot=sidebar-gap]:hidden",
+      )}
+      style={{ "--sidebar-width": `${leftSidebarWidth}px` }}
+    >
+      {children}
+    </SidebarProvider>
+  );
+}
 
 const WORKSPACE_MENU_SKELETON_ROWS = ["short", "medium", "compact"];
 
@@ -352,7 +387,6 @@ export type AppSidebarProps = {
   onForgetWorkspace: (workspaceId: string) => void;
   onOpenCreateWorkspace: () => void;
   onReorderWorkspaces?: (workspaceIds: string[]) => void;
-  onStartResize?: React.PointerEventHandler<HTMLButtonElement>;
 };
 
 function useSessionTree(
@@ -366,6 +400,7 @@ function useSessionTree(
 }
 
 export function AppSidebar(props: AppSidebarProps) {
+  const startLeftSidebarResize = useLeftSidebarResize();
   const [expandedWorkspaceIds, setExpandedWorkspaceIds] = React.useState<Set<string>>(
     () => new Set(),
   );
@@ -533,12 +568,12 @@ export function AppSidebar(props: AppSidebarProps) {
           </SidebarMenu>
         </SidebarFooter>
         <SidebarRail
-          aria-label={props.onStartResize ? t("session.resize_workspace_column") : undefined}
-          title={props.onStartResize ? t("session.resize_workspace_column") : undefined}
-          onClick={props.onStartResize ? (event) => {
+          aria-label={t("session.resize_workspace_column")}
+          title={t("session.resize_workspace_column")}
+          onClick={(event) => {
             event.preventDefault();
-          } : undefined}
-          onPointerDown={props.onStartResize}
+          }}
+          onPointerDown={startLeftSidebarResize}
         />
       </Sidebar>
     </SidebarContext.Provider>

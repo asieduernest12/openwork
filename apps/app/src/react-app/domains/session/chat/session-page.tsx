@@ -1,7 +1,5 @@
 /** @jsxImportSource react */
-import type { CSSProperties } from "react";
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { usePanelRef } from "react-resizable-panels";
 import { Globe, Loader2, Redo2, Undo2, Zap } from "lucide-react";
 
 import { t } from "../../../../i18n";
@@ -19,22 +17,15 @@ import type {
 } from "../../../../app/types";
 import type { ShareWorkspaceModalProps } from "../../workspace/types";
 import { Button } from "@/components/ui/button";
+import { cn } from "@/lib/utils";
 import { ConfirmModal } from "../../../design-system/modals/confirm-modal";
 import ProviderAuthModal, { type ProviderAuthModalProps } from "../../connections/provider-auth/provider-auth-modal";
 import { QuestionModal } from "../modals/question-modal";
 import { RenameSessionModal } from "../modals/rename-session-modal";
-import { AppSidebar } from "../sidebar/app-sidebar";
+import { AppSidebar, AppSidebarProvider } from "../sidebar/app-sidebar";
 import { SessionSurface, type SessionSurfaceProps } from "../surface/session-surface";
-import {
-  SidebarInset,
-  SidebarProvider,
-  SidebarTrigger,
-} from "@/components/ui/sidebar";
-import {
-  ResizableHandle,
-  ResizablePanel,
-  ResizablePanelGroup,
-} from "@/components/ui/resizable";
+import { SidebarInset, SidebarTrigger } from "@/components/ui/sidebar";
+import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from "@/components/ui/resizable";
 import { ShareWorkspaceModal } from "../../workspace/share-workspace-modal";
 import { StatusBar, type StatusBarProps } from "./status-bar";
 import { OwDotTicker } from "../../../shell/dot-ticker";
@@ -44,8 +35,11 @@ import { useUiStateStore } from "../../../shell/ui-state-store";
 
 import { isElectronRuntime } from "../../../../app/utils";
 import { BrowserPanel } from "../browser/browser-panel";
-import { useWorkspaceShellLayout } from "../../../shell/workspace-shell-layout";
-import { cn } from "@/lib/utils";
+import {
+  ResizableBrowserPanel,
+  useResizableBrowserPanelLayout,
+} from "../browser/resizable-browser-panel";
+import { useElectronBrowserPanelSync } from "../browser/use-electron-browser-panel-sync";
 
 const STARTUP_SKELETON_ROWS = [
   { id: "intro", titleWidth: "42%", bodyWidth: "88%" },
@@ -182,11 +176,7 @@ function sessionTitleForId(groups: WorkspaceSessionGroup[], id: string | null | 
 
 export function SessionPage(props: SessionPageProps) {
   const { config: shellConfig } = useShellConfig();
-  const sidebarOpen = useUiStateStore((state) => state.sidebarOpen);
-  const setSidebarOpen = useUiStateStore((state) => state.setSidebarOpen);
   const browserPanelOpen = useUiStateStore((state) => state.browserPanelOpen);
-  const openBrowserPanel = useUiStateStore((state) => state.openBrowserPanel);
-  const closeBrowserPanel = useUiStateStore((state) => state.closeBrowserPanel);
   const toggleBrowserPanel = useUiStateStore((state) => state.toggleBrowserPanel);
 
   useReactRenderWatchdog("SessionPage", {
@@ -204,43 +194,14 @@ export function SessionPage(props: SessionPageProps) {
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [deleteBusy, setDeleteBusy] = useState(false);
   const [sessionActionId, setSessionActionId] = useState<string | null>(null);
-  const browserPanelRef = usePanelRef();
 
-  // Sync browser panel state with Electron main process IPC events.
-  // When the agent calls a built-in browser tool, the main process opens
-  // the WebContentsView and sends panel-opened; when hide_browser is called
-  // it sends panel-closed.  Without this listener the React UI never knows
-  // the panel opened and doesn't render the BrowserPanel toolbar.
-  useEffect(() => {
-    if (!isElectronRuntime()) return;
-    const browser = (window as Window).__OPENWORK_ELECTRON__?.browser;
-    if (!browser) return;
-    const unsubOpen = browser.onPanelOpened?.(openBrowserPanel);
-    const unsubClose = browser.onPanelClosed?.(closeBrowserPanel);
-    return () => { unsubOpen?.(); unsubClose?.(); };
-  }, [closeBrowserPanel, openBrowserPanel]);
+  useElectronBrowserPanelSync();
+  
   const {
-    leftSidebarResizing,
-    leftSidebarWidth,
-    rightSidebarExpandedWidth: browserPanelWidth,
-    setRightSidebarExpandedWidth: setBrowserPanelWidth,
-    startLeftSidebarResize,
-  } = useWorkspaceShellLayout({
-    expandedRightWidth: 520,
-    minRightWidth: 320,
-  });
-  const [browserPanelDefaultWidth, setBrowserPanelDefaultWidth] = useState(browserPanelWidth);
-  const sidebarProviderStyle: CSSProperties & Record<"--sidebar-width", string> = {
-    "--sidebar-width": `${leftSidebarWidth}px`,
-  };
-  useEffect(() => {
-    if (browserPanelOpen) return;
-    setBrowserPanelDefaultWidth(browserPanelWidth);
-  }, [browserPanelOpen, browserPanelWidth]);
-  const commitBrowserPanelWidth = useCallback(() => {
-    const size = browserPanelRef.current?.getSize();
-    if (size?.inPixels) setBrowserPanelWidth(Math.round(size.inPixels));
-  }, [browserPanelRef, setBrowserPanelWidth]);
+    browserPanelDefaultWidth,
+    browserPanelRef,
+    commitBrowserPanelWidth,
+  } = useResizableBrowserPanelLayout(browserPanelOpen);
   const [showDelayedSessionLoadingState, setShowDelayedSessionLoadingState] = useState(false);
 
   const selectedSessionTitle = useMemo(
@@ -255,8 +216,6 @@ export function SessionPage(props: SessionPageProps) {
     props.selectedWorkspaceDisplay.displayName?.trim() ||
     props.selectedWorkspaceDisplay.name?.trim() ||
     t("session.workspace_fallback");
-  const providerCount = props.providerConnectedIds.length;
-  const messageCountVisible = props.selectedSessionId ? 1 : 0;
   const showWorkspaceSetupEmptyState = props.workspaces.length === 0 && !props.selectedSessionId;
   const showStartupSkeleton =
     !props.selectedSessionId &&
@@ -357,17 +316,7 @@ export function SessionPage(props: SessionPageProps) {
 
   return (
     <div className="flex h-full min-h-0 flex-col bg-[radial-gradient(circle_at_top,rgba(74,111,255,0.12),transparent_42%),var(--app-bg,#0b1020)] text-dls-text mac:bg-transparent">
-      <SidebarProvider
-        open={sidebarOpen}
-        onOpenChange={setSidebarOpen}
-        className={cn(
-          "relative min-h-0 flex-1 mac:bg-transparent",
-          leftSidebarResizing &&
-            "**:data-[slot=sidebar-container]:transition-none **:data-[slot=sidebar-gap]:transition-none",
-          !shellConfig.sidebar && "**:data-[slot=sidebar-container]:hidden **:data-[slot=sidebar-gap]:hidden",
-        )}
-        style={sidebarProviderStyle}
-      >
+      <AppSidebarProvider>
         <AppSidebar
           workspaceSessionGroups={props.sidebar.workspaceSessionGroups}
           selectedWorkspaceId={props.sidebar.selectedWorkspaceId}
@@ -397,7 +346,6 @@ export function SessionPage(props: SessionPageProps) {
           onForgetWorkspace={props.sidebar.onForgetWorkspace}
           onOpenCreateWorkspace={props.sidebar.onOpenCreateWorkspace}
           onReorderWorkspaces={props.sidebar.onReorderWorkspaces}
-          onStartResize={startLeftSidebarResize}
         />
         <SidebarInset className="min-h-0 overflow-hidden bg-background mac:bg-background/80 mac:[&_header]:transition-[padding-left] mac:[&_header]:duration-200 mac:[&_header]:ease-linear mac:peer-data-[state=collapsed]:[&_header]:pl-28 mac:max-md:[&_header]:pl-28">
           <ResizablePanelGroup
@@ -683,21 +631,18 @@ export function SessionPage(props: SessionPageProps) {
             {browserPanelOpen ? (
               <>
                 <ResizableHandle withHandle className="hidden lg:flex" />
-                <ResizablePanel
+                <ResizableBrowserPanel
+                  defaultWidth={browserPanelDefaultWidth}
                   panelRef={browserPanelRef}
-                  defaultSize={`${browserPanelDefaultWidth}px`}
-                  minSize="320px"
-                  maxSize="70%"
-                  className="min-h-0 overflow-hidden lg:flex lg:flex-col"
                 >
-                  <BrowserPanel onClose={closeBrowserPanel} />
-                </ResizablePanel>
+                  <BrowserPanel />
+                </ResizableBrowserPanel>
               </>
             ) : null}
           </ResizablePanelGroup>
         </SidebarInset>
         {shellConfig.sidebar ? <SidebarTrigger className="hidden mac:absolute mac:left-[64px] top-[3px] z-50 mac:flex titlebar-no-drag" /> : null}
-      </SidebarProvider>
+      </AppSidebarProvider>
 
       {props.providerAuthModal ? <ProviderAuthModal {...props.providerAuthModal} /> : null}
 

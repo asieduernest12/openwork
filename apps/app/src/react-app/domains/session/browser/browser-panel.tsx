@@ -2,7 +2,8 @@
 import { useCallback, useEffect, useRef } from "react";
 import { ArrowLeft, ArrowRight, Globe, Loader2, Plus, RotateCw, X } from "lucide-react";
 import { Reorder, useDragControls } from "motion/react";
-import { isElectronRuntime } from "../../../../app/utils";
+import { isElectronRuntime } from "@/app/utils";
+import { useUiStateStore } from "../../../shell/ui-state-store";
 import { Button } from "@/components/ui/button";
 import {
   InputGroup,
@@ -186,8 +187,9 @@ function BrowserTab({ tab }: BrowserTabProps) {
   );
 }
 
-export function BrowserPanel({ onClose }: BrowserPanelProps) {
+export function BrowserPanel() {
   const [state, dispatch] = useBrowserState();
+  const closeBrowserPanel = useUiStateStore((state) => state.closeBrowserPanel);
   const urlFocusedRef = useRef(false);
   const panelRef = useRef<HTMLDivElement>(null);
   const toolbarRef = useRef<HTMLDivElement>(null);
@@ -410,7 +412,7 @@ export function BrowserPanel({ onClose }: BrowserPanelProps) {
                 <Globe />
               </InputGroupAddon>
             </InputGroup>
-            <Button variant="ghost" size="icon-sm" onClick={onClose} title="Close browser" aria-label="Close browser panel">
+            <Button variant="ghost" size="icon-sm" onClick={closeBrowserPanel} title="Close browser" aria-label="Close browser panel">
               <X />
             </Button>
           </div>
