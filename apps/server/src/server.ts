@@ -2,7 +2,7 @@ import { existsSync } from "node:fs";
 import { readFile, writeFile, rm, readdir, rename, stat, appendFile, mkdir } from "node:fs/promises";
 import { homedir, hostname } from "node:os";
 import { basename, dirname, join, relative, resolve, sep } from "node:path";
-import type { ApprovalRequest, Capabilities, ServerConfig, WorkspaceInfo, Actor, ReloadReason, ReloadTrigger, TokenScope } from "./types.js";
+import type { ApprovalRequest, Capabilities, FileTreeNode, ServerConfig, WorkspaceInfo, Actor, ReloadReason, ReloadTrigger, TokenScope } from "./types.js";
 import { ApprovalService } from "./approvals.js";
 import { addPlugin, listPlugins, normalizePluginSpec, removePlugin } from "./plugins.js";
 import { sanitizePortableOpencodeConfig } from "./portable-opencode.js";
@@ -2647,6 +2647,101 @@ function createRoutes(
     });
 
     return jsonResponse({ ok: true, path: relativePath, bytes, updatedAt: after.mtimeMs, revision });
+  });
+
+  const WORKSPACE_TREE_MAX_DEPTH = 10;
+  const WORKSPACE_TREE_DEFAULT_DEPTH = 1;
+  const WORKSPACE_IGNORED_DIRS = [".git", "node_modules", ".venv", "__pycache__", ".next", ".openwork", ".opencode"];
+
+  async function readDirectoryTree(
+    root: string,
+    dir: string,
+    depth: number,
+    maxDepth: number,
+  ): Promise<FileTreeNode[]> {
+    const entries = await readdir(dir, { withFileTypes: true });
+    const nodes: FileTreeNode[] = [];
+
+    for (const entry of entries) {
+      if (entry.isDirectory() && WORKSPACE_IGNORED_DIRS.includes(entry.name)) {
+        continue;
+      }
+
+      const entryPath = join(dir, entry.name);
+      const resolvedPath = resolve(entryPath);
+      const rootResolved = resolve(root);
+      if (entry.isDirectory() && resolvedPath === rootResolved) {
+        continue;
+      }
+      if (!resolvedPath.startsWith(rootResolved + sep) && resolvedPath !== rootResolved) {
+        continue;
+      }
+
+      const relativePath = relative(root, resolvedPath).replace(/\\/g, "/");
+
+      if (entry.isDirectory()) {
+        const info = await stat(resolvedPath);
+        const node: FileTreeNode = {
+          name: entry.name,
+          path: relativePath,
+          type: "directory",
+          size: info.size,
+          updatedAt: info.mtimeMs,
+        };
+
+        if (depth < maxDepth) {
+          node.children = await readDirectoryTree(root, resolvedPath, depth + 1, maxDepth);
+        }
+
+        nodes.push(node);
+      } else {
+        const info = await stat(resolvedPath);
+        nodes.push({
+          name: entry.name,
+          path: relativePath,
+          type: "file",
+          size: info.size,
+          updatedAt: info.mtimeMs,
+        });
+      }
+    }
+
+    // Sort: directories first, then files; alphabetical within each group
+    nodes.sort((a, b) => {
+      if (a.type !== b.type) return a.type === "directory" ? -1 : 1;
+      return a.name.localeCompare(b.name);
+    });
+
+    return nodes;
+  }
+
+  addRoute(routes, "GET", "/workspace/:id/files/tree", "client", async (ctx) => {
+    const workspace = await resolveWorkspace(config, ctx.params.id);
+    const requestedDir = (ctx.url.searchParams.get("path") ?? "").trim();
+    const depthParam = ctx.url.searchParams.get("depth");
+    const parsedDepth = depthParam ? parseInt(depthParam, 10) : WORKSPACE_TREE_DEFAULT_DEPTH;
+    const maxDepth = Number.isFinite(parsedDepth) ? Math.max(1, Math.min(parsedDepth, WORKSPACE_TREE_MAX_DEPTH)) : WORKSPACE_TREE_DEFAULT_DEPTH;
+
+    let relativeDir: string;
+    if (!requestedDir) {
+      relativeDir = "";
+    } else {
+      relativeDir = normalizeWorkspaceRelativePath(requestedDir, { allowSubdirs: true });
+    }
+
+    const absDir = relativeDir ? resolveSafeChildPath(workspace.path, relativeDir) : resolve(workspace.path);
+    let dirStat;
+    try {
+      dirStat = await stat(absDir);
+    } catch {
+      throw new ApiError(404, "directory_not_found", "Directory not found");
+    }
+    if (!dirStat.isDirectory()) {
+      throw new ApiError(400, "invalid_path", "Path must point to a directory");
+    }
+
+    const children = await readDirectoryTree(workspace.path, absDir, 1, maxDepth);
+    return jsonResponse({ path: relativeDir || ".", children });
   });
 
   addRoute(routes, "GET", "/workspace/:id/plugins", "client", async (ctx) => {

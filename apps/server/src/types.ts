@@ -227,3 +227,17 @@ export interface AuditEntry {
   summary: string;
   timestamp: number;
 }
+
+export interface FileTreeNode {
+  name: string;
+  path: string;
+  type: "file" | "directory";
+  size?: number;
+  updatedAt?: number;
+  children?: FileTreeNode[];
+}
+
+export interface FileTreeResponse {
+  path: string;
+  children: FileTreeNode[];
+}

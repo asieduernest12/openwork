@@ -2,7 +2,7 @@
 import type { CSSProperties } from "react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { usePanelRef } from "react-resizable-panels";
-import { FileText, Globe, Zap } from "lucide-react";
+import { FileText, FolderOpen, Globe, Zap } from "lucide-react";
 
 import { t } from "../../../../i18n";
 import { type OpenworkServerClient, type OpenworkServerStatus } from "../../../../app/lib/openwork-server";
@@ -45,6 +45,7 @@ import { useUiStateStore } from "../../../shell/ui-state-store";
 import { isElectronRuntime } from "../../../../app/utils";
 import { BrowserPanel } from "../browser/browser-panel";
 import { ArtifactPanel } from "../artifacts/artifact-panel";
+import { WorkspaceFileExplorer } from "../files/workspace-file-explorer";
 import { isCollectibleArtifactTarget, isLocalhostBrowserTarget, type OpenTarget } from "../artifacts/open-target";
 import { useWorkspaceShellLayout } from "../../../shell/workspace-shell-layout";
 import { cn } from "@/lib/utils";
@@ -223,7 +224,7 @@ export function SessionPage(props: SessionPageProps) {
   const browserPanelOpen = useUiStateStore((state) => state.browserPanelOpen);
   const openBrowserPanel = useUiStateStore((state) => state.openBrowserPanel);
   const closeBrowserPanel = useUiStateStore((state) => state.closeBrowserPanel);
-  const [rightPaneMode, setRightPaneMode] = useState<"browser" | "artifact">("browser");
+  const [rightPaneMode, setRightPaneMode] = useState<"browser" | "artifact" | "files">("browser");
   const [artifactTarget, setArtifactTarget] = useState<OpenTarget | null>(null);
   const [openTargets, setOpenTargets] = useState<OpenTarget[]>([]);
   const [hiddenAccessibleTargetIds, setHiddenAccessibleTargetIds] = useState<Set<string>>(() => new Set());
@@ -238,6 +239,7 @@ export function SessionPage(props: SessionPageProps) {
   const hasArtifactTargets = artifactTargetCount > 0;
   const browserRailActive = browserPanelOpen && rightPaneMode === "browser";
   const artifactRailActive = browserPanelOpen && rightPaneMode === "artifact";
+  const filesRailActive = browserPanelOpen && rightPaneMode === "files";
 
   useReactRenderWatchdog("SessionPage", {
     selectedSessionId: props.selectedSessionId,
@@ -366,6 +368,15 @@ export function SessionPage(props: SessionPageProps) {
     preserveRightPaneModeOnPanelOpenRef.current = true;
     openBrowserPanel();
   }, [artifactRailActive, closeBrowserPanel, hasArtifactTargets, openBrowserPanel]);
+  const openFilesRailPane = useCallback(() => {
+    if (filesRailActive) {
+      closeBrowserPanel();
+      return;
+    }
+    setRightPaneMode("files");
+    preserveRightPaneModeOnPanelOpenRef.current = true;
+    openBrowserPanel();
+  }, [filesRailActive, closeBrowserPanel, openBrowserPanel]);
   const removeAccessibleTarget = useCallback((target: OpenTarget) => {
     setHiddenAccessibleTargetIds((current) => new Set(current).add(target.id));
     setArtifactTarget((current) => current?.id === target.id ? null : current);
@@ -834,6 +845,14 @@ export function SessionPage(props: SessionPageProps) {
                       onSelectTarget={openTarget}
                       onClose={closeRightPane}
                     />
+                  ) : rightPaneMode === "files" && props.openworkServerClient && props.runtimeWorkspaceId ? (
+                    <WorkspaceFileExplorer
+                      client={props.openworkServerClient}
+                      workspaceId={props.runtimeWorkspaceId}
+                      workspaceRoot={props.selectedWorkspaceRoot}
+                      isRemoteWorkspace={props.surface?.isRemoteWorkspace ?? false}
+                      onClose={closeRightPane}
+                    />
                   ) : (
                     <BrowserPanel onClose={closeRightPane} />
                   )}
@@ -858,6 +877,20 @@ export function SessionPage(props: SessionPageProps) {
                 <Globe size={17} />
               </Button>
             ) : null}
+            <Button
+              variant="ghost"
+              size="icon-sm"
+              className={cn(
+                "rounded-xl transition-colors hover:bg-muted hover:text-foreground",
+                filesRailActive && "bg-primary/10 text-primary hover:bg-primary/15 hover:text-primary",
+              )}
+              onClick={openFilesRailPane}
+              title="Files"
+              aria-label="Files"
+              aria-pressed={filesRailActive}
+            >
+              <FolderOpen size={17} />
+            </Button>
             <Button
               variant="ghost"
               size="icon-sm"
